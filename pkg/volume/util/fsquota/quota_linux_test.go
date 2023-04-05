@@ -461,11 +461,15 @@ var quotaTestCases = []quotaTestCase{
 	},
 	{
 		"/quota1/b", "x", 1024, "Set", projects3, projid3,
-		true, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		true, true, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 	},
 	{
 		"/quota1/b", "", 1024, "Clear", projects4, projid4,
 		true, true, -1, -1, -1, -1, 0, -1, -1, -1, -1, -1, -1,
+	},
+	{
+		"/quota2/b", "x", 2048, "Set", projects3, projid3,
+		true, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 	},
 	{
 		"/noquota/a", "", 1024, "Supports", projects4, projid4,
