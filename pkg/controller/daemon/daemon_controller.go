@@ -815,6 +815,7 @@ func (dsc *DaemonSetsController) podsShouldBeOnNode(
 
 	shouldRun, shouldContinueRunning := NodeShouldRunDaemonPod(node, ds)
 	daemonPods, exists := nodeToDaemonPods[node.Name]
+	inShutdown := NodeInShutdown(node)
 
 	switch {
 	case shouldRun && !exists:
@@ -829,6 +830,15 @@ func (dsc *DaemonSetsController) podsShouldBeOnNode(
 				continue
 			}
 			if pod.Status.Phase == v1.PodFailed {
+				if inShutdown {
+					msg := fmt.Sprintf("Found shutdown daemon pod %s/%s on node %s, will try to delete it", pod.Namespace, pod.Name, node.Name)
+					logger.V(2).Info("Found shutdown daemon pod on node, will try to delete it", "pod", klog.KObj(pod), "node", klog.KObj(node))
+					// Emit an event so that it's discoverable to users.
+					dsc.eventRecorder.Eventf(ds, v1.EventTypeNormal, SucceededDaemonPodReason, msg)
+					podsToDelete = append(podsToDelete, pod.Name)
+					continue
+				}
+
 				// This is a critical place where DS is often fighting with kubelet that rejects pods.
 				// We need to avoid hot looping and backoff.
 				backoffKey := failedPodsBackoffKey(ds, node.Name)
@@ -851,6 +861,15 @@ func (dsc *DaemonSetsController) podsShouldBeOnNode(
 				dsc.eventRecorder.Eventf(ds, v1.EventTypeWarning, FailedDaemonPodReason, msg)
 				podsToDelete = append(podsToDelete, pod.Name)
 			} else if pod.Status.Phase == v1.PodSucceeded {
+				if inShutdown {
+					msg := fmt.Sprintf("Found shutdown daemon pod %s/%s on node %s, will try to delete it", pod.Namespace, pod.Name, node.Name)
+					logger.V(2).Info("Found shutdown daemon pod on node, will try to delete it", "pod", klog.KObj(pod), "node", klog.KObj(node))
+					// Emit an event so that it's discoverable to users.
+					dsc.eventRecorder.Eventf(ds, v1.EventTypeNormal, SucceededDaemonPodReason, msg)
+					podsToDelete = append(podsToDelete, pod.Name)
+					continue
+				}
+
 				msg := fmt.Sprintf("Found succeeded daemon pod %s/%s on node %s, will try to delete it", pod.Namespace, pod.Name, node.Name)
 				logger.V(2).Info("Found succeeded daemon pod on node, will try to delete it", "pod", klog.KObj(pod), "node", klog.KObj(node))
 				// Emit an event so that it's discoverable to users.
@@ -1329,7 +1348,17 @@ func NodeShouldRunDaemonPod(node *v1.Node, ds *apps.DaemonSet) (bool, bool) {
 		return false, !hasUntoleratedTaint
 	}
 
-	return true, true
+	return !NodeInShutdown(node), true
+}
+
+func NodeInShutdown(node *v1.Node) bool {
+	for _, condition := range node.Status.Conditions {
+		if condition.Type == "NodeShutdown" && condition.Status == v1.ConditionTrue {
+			return true
+		}
+	}
+
+	return false
 }
 
 // predicates checks if a DaemonSet's pod can run on a node.

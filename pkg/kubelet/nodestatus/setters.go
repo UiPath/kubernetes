@@ -678,6 +678,63 @@ func PIDPressureCondition(nowFunc func() time.Time, // typically Kubelet.clock.N
 	}
 }
 
+// NodeShutdownCondition returns a Setter that updates the v1.NodeShutdown condition on the node.
+func NodeShutdownCondition(nowFunc func() time.Time, // typically Kubelet.clock.Now
+	nodeShutdownManagerErrorsFunc func() error, // typically kubelet.shutdownManager.ShutdownStatus
+	recordEventFunc func(eventType, event string), // typically Kubelet.recordNodeStatusEvent
+) Setter {
+	return func(ctx context.Context, node *v1.Node) error {
+		currentTime := metav1.NewTime(nowFunc())
+		var condition *v1.NodeCondition
+
+		// Check if NodeShutdown condition already exists and if it does, just pick it up for update.
+		for i := range node.Status.Conditions {
+			if node.Status.Conditions[i].Type == "NodeShutdown" {
+				condition = &node.Status.Conditions[i]
+			}
+		}
+
+		newCondition := false
+		// If the NodeShutdown condition doesn't exist, create one
+		if condition == nil {
+			condition = &v1.NodeCondition{
+				Type:   "NodeShutdown",
+				Status: v1.ConditionUnknown,
+			}
+			// cannot be appended to node.Status.Conditions here because it gets
+			// copied to the slice. So if we append to the slice here none of the
+			// updates we make below are reflected in the slice.
+			newCondition = true
+		}
+
+		// Update the heartbeat time
+		condition.LastHeartbeatTime = currentTime
+		err := nodeShutdownManagerErrorsFunc()
+
+		if err != nil {
+			if condition.Status != v1.ConditionTrue {
+				condition.Status = v1.ConditionTrue
+				condition.Reason = "NodeShutdown"
+				condition.Message = err.Error()
+				condition.LastTransitionTime = currentTime
+				recordEventFunc(v1.EventTypeNormal, "node is shutting down")
+			}
+		} else if condition.Status != v1.ConditionFalse {
+			condition.Status = v1.ConditionFalse
+			condition.Reason = "NodeShutdown"
+			condition.Message = "node is running"
+			condition.LastTransitionTime = currentTime
+			recordEventFunc(v1.EventTypeNormal, "node is up & running")
+		}
+
+		if newCondition {
+			node.Status.Conditions = append(node.Status.Conditions, *condition)
+		}
+
+		return nil
+	}
+}
+
 // DiskPressureCondition returns a Setter that updates the v1.NodeDiskPressure condition on the node.
 func DiskPressureCondition(nowFunc func() time.Time, // typically Kubelet.clock.Now
 	pressureFunc func() bool, // typically Kubelet.evictionManager.IsUnderDiskPressure
