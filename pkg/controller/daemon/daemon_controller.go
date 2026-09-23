@@ -872,7 +872,7 @@ func (dsc *DaemonSetsController) podsShouldBeOnNode(
 					msg := fmt.Sprintf("Found shutdown daemon pod %s/%s on node %s, will try to delete it", pod.Namespace, pod.Name, node.Name)
 					logger.V(2).Info("Found shutdown daemon pod on node, will try to delete it", "pod", klog.KObj(pod), "node", klog.KObj(node))
 					// Emit an event so that it's discoverable to users.
-					dsc.eventRecorder.Eventf(ds, v1.EventTypeNormal, SucceededDaemonPodReason, msg)
+					dsc.eventRecorder.Eventf(ds, v1.EventTypeNormal, SucceededDaemonPodReason, "%s", msg)
 					podsToDelete = append(podsToDelete, pod.Name)
 					continue
 				}
@@ -903,7 +903,7 @@ func (dsc *DaemonSetsController) podsShouldBeOnNode(
 					msg := fmt.Sprintf("Found shutdown daemon pod %s/%s on node %s, will try to delete it", pod.Namespace, pod.Name, node.Name)
 					logger.V(2).Info("Found shutdown daemon pod on node, will try to delete it", "pod", klog.KObj(pod), "node", klog.KObj(node))
 					// Emit an event so that it's discoverable to users.
-					dsc.eventRecorder.Eventf(ds, v1.EventTypeNormal, SucceededDaemonPodReason, msg)
+					dsc.eventRecorder.Eventf(ds, v1.EventTypeNormal, SucceededDaemonPodReason, "%s", msg)
 					podsToDelete = append(podsToDelete, pod.Name)
 					continue
 				}

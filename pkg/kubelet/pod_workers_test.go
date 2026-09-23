@@ -612,7 +612,7 @@ func TestUpdatePod(t *testing.T) {
 		name          string
 		update        UpdatePodOptions
 		runtimeStatus *kubecontainer.PodStatus
-		prepare       func(t *testing.T, tCtx context.Context, w *timeIncrementingWorkers) (afterUpdateFn func())
+		prepare       func(t *testing.T, tCtx context.Context, w *timeIncrementingWorkers, update *UpdatePodOptions) (afterUpdateFn func())
 
 		expect                *podSyncStatus
 		expectBeforeWorker    *podSyncStatus
@@ -639,7 +639,7 @@ func TestUpdatePod(t *testing.T) {
 				UpdateType: kubetypes.SyncPodCreate,
 				Pod:        withLabel(newNamedPod("1", "ns", "running-pod", false), "updated", "value"),
 			},
-			prepare: func(t *testing.T, tCtx context.Context, w *timeIncrementingWorkers) func() {
+			prepare: func(t *testing.T, tCtx context.Context, w *timeIncrementingWorkers, update *UpdatePodOptions) func() {
 				w.UpdatePod(tCtx, UpdatePodOptions{
 					UpdateType: kubetypes.SyncPodCreate,
 					Pod:        newNamedPod("1", "ns", "running-pod", false),
@@ -690,7 +690,7 @@ func TestUpdatePod(t *testing.T) {
 				UpdateType: kubetypes.SyncPodUpdate,
 				Pod:        withDeletionTimestamp(newNamedPod("1", "ns", "running-pod", false), time.Unix(1, 0), intp(15)),
 			},
-			prepare: func(t *testing.T, tCtx context.Context, w *timeIncrementingWorkers) func() {
+			prepare: func(t *testing.T, tCtx context.Context, w *timeIncrementingWorkers, update *UpdatePodOptions) func() {
 				w.UpdatePod(tCtx, UpdatePodOptions{
 					UpdateType: kubetypes.SyncPodCreate,
 					Pod:        newNamedPod("1", "ns", "running-pod", false),
@@ -721,7 +721,7 @@ func TestUpdatePod(t *testing.T) {
 				Pod:            newNamedPod("1", "ns", "running-pod", false),
 				KillPodOptions: &KillPodOptions{Evict: true},
 			},
-			prepare: func(t *testing.T, tCtx context.Context, w *timeIncrementingWorkers) func() {
+			prepare: func(t *testing.T, tCtx context.Context, w *timeIncrementingWorkers, update *UpdatePodOptions) func() {
 				w.UpdatePod(tCtx, UpdatePodOptions{
 					UpdateType: kubetypes.SyncPodCreate,
 					Pod:        newNamedPod("1", "ns", "running-pod", false),
@@ -841,6 +841,45 @@ func TestUpdatePod(t *testing.T) {
 			},
 			expect: nil,
 		},
+		{
+			name: "killPodNow on an already finished pod closes the completed channel",
+			update: UpdatePodOptions{
+				UpdateType:     kubetypes.SyncPodKill,
+				Pod:            newPodWithPhase("1", "done-pod", v1.PodSucceeded),
+				KillPodOptions: &KillPodOptions{Evict: true},
+			},
+			prepare: func(t *testing.T, tCtx context.Context, w *timeIncrementingWorkers, update *UpdatePodOptions) func() {
+				w.UpdatePod(tCtx, UpdatePodOptions{
+					UpdateType: kubetypes.SyncPodCreate,
+					Pod:        newPodWithPhase("1", "done-pod", v1.PodSucceeded),
+				})
+
+				ch := make(chan struct{}, 1)
+				update.KillPodOptions.CompletedCh = ch
+
+				return func() {
+					// wait for either a response, or a timeout
+					select {
+					case <-ch:
+					case <-time.After(1 * time.Second):
+						t.Errorf("timeout waiting to kill pod")
+					}
+				}
+			},
+			expect: hasCancelFn(&podSyncStatus{
+				fullname:      "done-pod_ns",
+				syncedAt:      time.Unix(1, 0),
+				terminatingAt: time.Unix(1, 0),
+				startedAt:     time.Unix(3, 0),
+				terminatedAt:  time.Unix(1, 0),
+				activeUpdate: &UpdatePodOptions{
+					Pod: newPodWithPhase("1", "done-pod", v1.PodSucceeded),
+				},
+				startedTerminating: true,
+				finished:           true,
+			}),
+			expectKnownTerminated: true,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var uid types.UID
@@ -865,7 +904,7 @@ func TestUpdatePod(t *testing.T) {
 			}
 
 			if tc.prepare != nil {
-				if fn := tc.prepare(t, tCtx, podWorkers); fn != nil {
+				if fn := tc.prepare(t, tCtx, podWorkers, &tc.update); fn != nil {
 					fns = append(fns, fn)
 				}
 			}
