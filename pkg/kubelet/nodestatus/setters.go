@@ -726,7 +726,24 @@ func NodeShutdownCondition(nowFunc func() time.Time, // typically Kubelet.clock.
 		}
 
 		if newCondition {
-			node.Status.Conditions = append(node.Status.Conditions, *condition)
+			// NodeReady has to stay last: some clients read the final condition
+			// (kubernetes/kubernetes#16961). This setter runs before ReadyCondition, so on a
+			// node that already reported Ready a plain append would leave NodeShutdown after
+			// it for good. Insert ahead of Ready when it is already present.
+			readyIdx := -1
+			for i := range node.Status.Conditions {
+				if node.Status.Conditions[i].Type == v1.NodeReady {
+					readyIdx = i
+					break
+				}
+			}
+			if readyIdx < 0 {
+				node.Status.Conditions = append(node.Status.Conditions, *condition)
+			} else {
+				node.Status.Conditions = append(node.Status.Conditions, v1.NodeCondition{})
+				copy(node.Status.Conditions[readyIdx+1:], node.Status.Conditions[readyIdx:])
+				node.Status.Conditions[readyIdx] = *condition
+			}
 		}
 
 		return nil
