@@ -1955,3 +1955,108 @@ func makeDiskPressureCondition(pressure bool, transition, heartbeat time.Time) *
 		LastHeartbeatTime:  metav1.NewTime(heartbeat),
 	}
 }
+
+func makeNodeShutdownCondition(shutdown bool, message string, transition, heartbeat time.Time) *v1.NodeCondition {
+	status := v1.ConditionFalse
+	if shutdown {
+		status = v1.ConditionTrue
+	}
+	return &v1.NodeCondition{
+		Type:               "NodeShutdown",
+		Status:             status,
+		Reason:             "NodeShutdown",
+		Message:            message,
+		LastTransitionTime: metav1.NewTime(transition),
+		LastHeartbeatTime:  metav1.NewTime(heartbeat),
+	}
+}
+
+func TestNodeShutdownCondition(t *testing.T) {
+	now := time.Now()
+	before := now.Add(-time.Second)
+	nowFunc := func() time.Time { return now }
+	shutdownErr := errors.New("node is shutting down")
+	readyCondition := v1.NodeCondition{
+		Type:               v1.NodeReady,
+		Status:             v1.ConditionTrue,
+		Reason:             "KubeletReady",
+		LastTransitionTime: metav1.NewTime(before),
+		LastHeartbeatTime:  metav1.NewTime(before),
+	}
+
+	cases := []struct {
+		desc             string
+		node             *v1.Node
+		shutdownErr      error
+		expectConditions []v1.NodeCondition
+		expectEvents     []testEvent
+	}{
+		{
+			desc:             "new, running",
+			node:             &v1.Node{},
+			expectConditions: []v1.NodeCondition{*makeNodeShutdownCondition(false, "node is running", now, now)},
+			expectEvents:     []testEvent{{eventType: v1.EventTypeNormal, event: "node is up & running"}},
+		},
+		{
+			desc:             "new, shutting down",
+			node:             &v1.Node{},
+			shutdownErr:      shutdownErr,
+			expectConditions: []v1.NodeCondition{*makeNodeShutdownCondition(true, shutdownErr.Error(), now, now)},
+			expectEvents:     []testEvent{{eventType: v1.EventTypeNormal, event: "node is shutting down"}},
+		},
+		{
+			// NodeReady must stay last: this setter runs before ReadyCondition, so on a node
+			// that already reported Ready the new condition has to be inserted, not appended.
+			desc: "new condition is inserted ahead of an existing NodeReady",
+			node: &v1.Node{
+				Status: v1.NodeStatus{Conditions: []v1.NodeCondition{readyCondition}},
+			},
+			expectConditions: []v1.NodeCondition{
+				*makeNodeShutdownCondition(false, "node is running", now, now),
+				readyCondition,
+			},
+			expectEvents: []testEvent{{eventType: v1.EventTypeNormal, event: "node is up & running"}},
+		},
+		{
+			desc: "transition to shutting down",
+			node: &v1.Node{
+				Status: v1.NodeStatus{
+					Conditions: []v1.NodeCondition{*makeNodeShutdownCondition(false, "node is running", before, before)},
+				},
+			},
+			shutdownErr:      shutdownErr,
+			expectConditions: []v1.NodeCondition{*makeNodeShutdownCondition(true, shutdownErr.Error(), now, now)},
+			expectEvents:     []testEvent{{eventType: v1.EventTypeNormal, event: "node is shutting down"}},
+		},
+		{
+			desc: "no transition, heartbeat only",
+			node: &v1.Node{
+				Status: v1.NodeStatus{
+					Conditions: []v1.NodeCondition{*makeNodeShutdownCondition(false, "node is running", before, before)},
+				},
+			},
+			expectConditions: []v1.NodeCondition{*makeNodeShutdownCondition(false, "node is running", before, now)},
+			expectEvents:     []testEvent{},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
+			ctx := ktesting.Init(t)
+			events := []testEvent{}
+			recordEventFunc := func(logger klog.Logger, eventType, event string) {
+				events = append(events, testEvent{eventType: eventType, event: event})
+			}
+			shutdownFunc := func() error { return tc.shutdownErr }
+			setter := NodeShutdownCondition(nowFunc, shutdownFunc, recordEventFunc)
+			if err := setter(ctx, tc.node); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			assert.True(t, apiequality.Semantic.DeepEqual(tc.expectConditions, tc.node.Status.Conditions),
+				"Diff: %s", cmp.Diff(tc.expectConditions, tc.node.Status.Conditions))
+			require.Equal(t, len(tc.expectEvents), len(events))
+			for i := range tc.expectEvents {
+				assert.Equal(t, tc.expectEvents[i], events[i])
+			}
+		})
+	}
+}
