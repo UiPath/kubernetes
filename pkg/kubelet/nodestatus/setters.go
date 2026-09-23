@@ -678,9 +678,10 @@ func PIDPressureCondition(nowFunc func() time.Time, // typically Kubelet.clock.N
 // NodeShutdownCondition returns a Setter that updates the v1.NodeShutdown condition on the node.
 func NodeShutdownCondition(nowFunc func() time.Time, // typically Kubelet.clock.Now
 	nodeShutdownManagerErrorsFunc func() error, // typically kubelet.shutdownManager.ShutdownStatus
-	recordEventFunc func(eventType, event string), // typically Kubelet.recordNodeStatusEvent
+	recordEventFunc func(logger klog.Logger, eventType, event string), // typically Kubelet.recordNodeStatusEvent
 ) Setter {
 	return func(ctx context.Context, node *v1.Node) error {
+		logger := klog.FromContext(ctx)
 		currentTime := metav1.NewTime(nowFunc())
 		var condition *v1.NodeCondition
 
@@ -714,14 +715,14 @@ func NodeShutdownCondition(nowFunc func() time.Time, // typically Kubelet.clock.
 				condition.Reason = "NodeShutdown"
 				condition.Message = err.Error()
 				condition.LastTransitionTime = currentTime
-				recordEventFunc(v1.EventTypeNormal, "node is shutting down")
+				recordEventFunc(logger, v1.EventTypeNormal, "node is shutting down")
 			}
 		} else if condition.Status != v1.ConditionFalse {
 			condition.Status = v1.ConditionFalse
 			condition.Reason = "NodeShutdown"
 			condition.Message = "node is running"
 			condition.LastTransitionTime = currentTime
-			recordEventFunc(v1.EventTypeNormal, "node is up & running")
+			recordEventFunc(logger, v1.EventTypeNormal, "node is up & running")
 		}
 
 		if newCondition {
